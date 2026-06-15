@@ -16,15 +16,6 @@ interface PathViewProps {
 }
 
 export default function PathView({ userStats, onSelectLesson }: PathViewProps) {
-  // Calculate initial active level category tab based on progress
-  const getInitialActiveLevel = () => {
-    if (userStats.unlockedUnitIndex < 15) return 'Basic';
-    if (userStats.unlockedUnitIndex < 30) return 'Moderate';
-    return 'High Level';
-  };
-
-  const [activeLevel, setActiveLevel] = React.useState<'Basic' | 'Moderate' | 'High Level'>(getInitialActiveLevel());
-
   // Check if all lessons of a unit are completed
   const isUnitCompleted = (unitIndex: number): boolean => {
     if (unitIndex < 0 || unitIndex >= CURRICULUM.length) return false;
@@ -118,50 +109,8 @@ export default function PathView({ userStats, onSelectLesson }: PathViewProps) {
         </div>
       </div>
 
-      {/* Level Selection Tabs */}
-      <div className="grid grid-cols-3 bg-gray-100 p-1 rounded-2xl gap-1 mb-8 shadow-inner">
-        {(['Basic', 'Moderate', 'High Level'] as const).map((lvl) => {
-          const isActive = activeLevel === lvl;
-          const isLevelUnlocked = (lvl === 'Basic') || 
-            (lvl === 'Moderate' && userStats.unlockedUnitIndex >= 15) || 
-            (lvl === 'High Level' && userStats.unlockedUnitIndex >= 30);
-
-          return (
-            <button
-              key={lvl}
-              onClick={() => {
-                sound.playClick();
-                setActiveLevel(lvl);
-              }}
-              className={`py-3 px-2 rounded-xl text-xs sm:text-sm font-heading font-black transition-all flex flex-col sm:flex-row items-center justify-center gap-1.5 cursor-pointer select-none ${
-                isActive
-                  ? 'bg-white text-slate-800 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700 hover:bg-white/40'
-              }`}
-            >
-              <span>
-                {lvl === 'Basic' && '👶'}
-                {lvl === 'Moderate' && '🤝'}
-                {lvl === 'High Level' && '🚀'}
-              </span>
-              <span className="truncate">{lvl}</span>
-              {!isLevelUnlocked && (
-                <Lock className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-              )}
-            </button>
-          );
-        })}
-      </div>
-
       {/* Curriculum Path Loop */}
       {CURRICULUM.map((unit, unitIdx) => {
-        // Determine level of this unit
-        let currentUnitLevel: 'Basic' | 'Moderate' | 'High Level' = 'Basic';
-        if (unitIdx >= 15 && unitIdx < 30) currentUnitLevel = 'Moderate';
-        if (unitIdx >= 30) currentUnitLevel = 'High Level';
-
-        // Filter units by active category level
-        if (currentUnitLevel !== activeLevel) return null;
 
         // Calculate completed golden lessons in this unit
         const totalLessons = unit.lessons.length;
@@ -281,8 +230,8 @@ export default function PathView({ userStats, onSelectLesson }: PathViewProps) {
 
                           {/* Level counter/Indicator */}
                           {unlocked && (
-                            <span className="absolute -bottom-2 bg-slate-800 text-white font-extrabold text-[10px] px-2 py-0.5 rounded-full border border-slate-700 tracking-wide">
-                              {completeInfo?.completedCount || 0}/3 Completed
+                            <span className="absolute -bottom-2 bg-slate-800 text-white font-extrabold text-[10px] px-2.5 py-0.5 rounded-full border border-slate-700 tracking-wide">
+                              {isGolden ? '🏆 Completed' : '👉 Start'}
                             </span>
                           )}
                         </button>

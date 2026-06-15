@@ -5,10 +5,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Volume2, X, Heart, Sparkles, CheckCircle2, AlertCircle, ArrowRight, RefreshCw, Trophy } from 'lucide-react';
+import { Volume2, X, Heart, Sparkles, CheckCircle2, AlertCircle, ArrowRight, RefreshCw, Trophy, Brain, Loader2 } from 'lucide-react';
 import { BaseExercise, Lesson, UserStats } from '../types';
 import { sound } from '../sound';
 import { speakText } from '../utils';
+import { RAW_UNITS } from '../data';
 
 interface LessonOverlayProps {
   lesson: Lesson;
@@ -16,6 +17,144 @@ interface LessonOverlayProps {
   isReviewMode?: boolean; // If playing mistakes queue or custom practices
   onClose: () => void;
   onFinishLesson: (xpEarned: number, incorrectAnswers: BaseExercise[]) => void;
+}
+
+// Dynamically generate a fresh set of randomized exercises based on the current unit & lesson indices (making around 10 exercises matching unit context)
+function generateDynamicExercises(lessonId: string, baseExercises: BaseExercise[]): BaseExercise[] {
+  // If it's custom practice, custom mistakes redemption, or any special custom exercises, respect its custom set
+  if (lessonId === 'weak_skills_practice' || lessonId === 'mistakes_redemption') {
+    return [...baseExercises];
+  }
+
+  const match = lessonId.match(/^u(\d+)_p(\d+)$/);
+  if (!match) {
+    return [...baseExercises];
+  }
+
+  const unitNum = parseInt(match[1], 10);
+  const partIdx = parseInt(match[2], 10);
+
+  const raw = RAW_UNITS.find(u => u.id === unitNum);
+  if (!raw) {
+    return [...baseExercises];
+  }
+
+  const exercises: BaseExercise[] = [];
+  const rawWords = [...raw.words];
+
+  // Create a randomized but stable offset based on unit & part index
+  const baseOffset = (unitNum * 17) + (partIdx * 23);
+
+  const adjectives = ["beautiful", "amazing", "wonderful", "special", "happy", "little", "grand", "simple", "modern", "vivid", "silent", "perfect", "clear", "fresh"];
+  const fillers = ["today", "tomorrow", "tonight", "every day", "right now", "with friends", "carefully", "always", "sometimes", "perfectly"];
+
+  const templates = [
+    (w: string, adj: string, fil: string) => `I want an elegant ${w} ${fil}.`,
+    (w: string, adj: string, fil: string) => `The ${adj} ${w} is sleeping ${fil}.`,
+    (w: string, adj: string, fil: string) => `We saw a very ${adj} ${w} ${fil}.`,
+    (w: string, adj: string, fil: string) => `He loves to keep a ${adj} ${w} nearby.`,
+    (w: string, adj: string, fil: string) => `Can you see that ${adj} ${w} over there?`,
+    (w: string, adj: string, fil: string) => `Please bring me a fresh ${w} ${fil}.`,
+    (w: string, adj: string, fil: string) => `The master explained the concept of ${w} ${fil}.`,
+    (w: string, adj: string, fil: string) => `It is important to observe the ${w} with care.`,
+    (w: string, adj: string, fil: string) => `We completed this study about ${w} perfectly.`,
+    (w: string, adj: string, fil: string) => `They will discuss the details of ${w} ${fil}.`
+  ];
+
+  const shuffle = <T,>(arr: T[]): T[] => [...arr].sort(() => Math.random() - 0.5);
+
+  // Generate exactly 12 exercises matching 3 options MCQ constraints perfectly
+  for (let i = 1; i <= 12; i++) {
+    const exTypeModulo = i % 5;
+    
+    // Choose distinct word, adjective, filler and template based on offsets and item index i
+    const wordIndex = (baseOffset + i) % rawWords.length;
+    const randomWord = rawWords[wordIndex];
+    
+    const adjIndex = (baseOffset + i * 3) % adjectives.length;
+    const randomAdj = adjectives[adjIndex];
+    
+    const filIndex = (baseOffset + i * 7) % fillers.length;
+    const randomFil = fillers[filIndex];
+    
+    const templateIndex = (baseOffset + i * 11) % templates.length;
+    const currentSentence = templates[templateIndex](randomWord, randomAdj, randomFil);
+
+    if (exTypeModulo === 0) {
+      // 1. Meaning selection (exact 3 options MCQ)
+      const otherWords = rawWords.filter(w => w !== randomWord);
+      const option1 = `The primary term representing "${randomWord}" in the context of ${raw.title}.`;
+      
+      const distWord1 = otherWords[0] || "alternative";
+      const distWord2 = otherWords[1] || "concept";
+
+      const option2 = `Our vocabulary key definition representing "${distWord1}".`;
+      const option3 = `The distinct study phrase relating to "${distWord2}".`;
+
+      exercises.push({
+        id: `${lessonId}_fallback_${i}_ms`,
+        type: 'meaning-selection',
+        prompt: `Select the correct English definition for "${randomWord}"`,
+        correctAnswer: option1,
+        options: shuffle([option1, option2, option3])
+      });
+    } else if (exTypeModulo === 1) {
+      // 2. Fill in the blank (exact 3 options MCQ)
+      const replacedSentence = currentSentence.replace(new RegExp(`\\b${randomWord}\\b`, 'gi'), '_______');
+      
+      const fillerOptions = ['something', 'always', 'never', 'today', 'people', 'world'].filter(w => w.toLowerCase() !== randomWord.toLowerCase());
+      const otherVocabFillers = rawWords.filter(w => w.toLowerCase() !== randomWord.toLowerCase());
+      const fillOption1 = otherVocabFillers[0] || fillerOptions[0];
+      const fillOption2 = otherVocabFillers[1] || fillerOptions[1];
+
+      exercises.push({
+        id: `${lessonId}_fallback_${i}_fitb`,
+        type: 'fill-in-the-blank',
+        prompt: `Select the missing word to complete this unit pattern: "${replacedSentence}"`,
+        correctAnswer: randomWord,
+        options: shuffle([randomWord, fillOption1, fillOption2])
+      });
+    } else if (exTypeModulo === 2) {
+      // 3. Sentence scramble
+      const scrambleWords = currentSentence.split(' ');
+
+      exercises.push({
+        id: `${lessonId}_fallback_${i}_scramble`,
+        type: 'sentence-scramble',
+        prompt: `Arrange the words to form this clean statement:`,
+        correctAnswer: currentSentence,
+        options: shuffle(scrambleWords)
+      });
+    } else if (exTypeModulo === 3) {
+      // 4. Listening comprehension (exact 3 options MCQ)
+      const otherSentences = templates.map((t, idx) => {
+        const w = rawWords[(wordIndex + idx + 1) % rawWords.length];
+        return t(w, adjectives[(adjIndex + idx) % adjectives.length], fillers[(filIndex + idx) % fillers.length]);
+      });
+      const dist1 = otherSentences[0] || `An alternative spoken grammatical statement.`;
+      const dist2 = otherSentences[1] || `Please stand outside and check the weather pattern.`;
+
+      exercises.push({
+        id: `${lessonId}_fallback_${i}_listening`,
+        type: 'listening-comprehension',
+        prompt: `Listen closely and select what sound is dictated:`,
+        audioText: currentSentence,
+        correctAnswer: currentSentence,
+        options: shuffle([currentSentence, dist1, dist2])
+      });
+    } else {
+      // 5. Dictation
+      exercises.push({
+        id: `${lessonId}_fallback_${i}_dict`,
+        type: 'dictation',
+        prompt: `Listen and type the sentence perfectly:`,
+        audioText: currentSentence,
+        correctAnswer: currentSentence
+      });
+    }
+  }
+
+  return exercises;
 }
 
 // Normalize strings for reliable comparisons (ignores casing, periods, commas, extra spacing)
@@ -36,12 +175,16 @@ export default function LessonOverlay({
 }: LessonOverlayProps) {
   const [exercises, setExercises] = useState<BaseExercise[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [hearts, setHearts] = useState(5);
+  const [hearts, setHearts] = useState(3);
   
+  // AI Question Generation States
+  const [isLoadingAI, setIsLoadingAI] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
   // Selection/Interaction States
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [scrambleBank, setScrambleBank] = useState<string[]>([]); // Pooled scramble words
-  const [scrambleAnswer, setScrambleAnswer] = useState<string[]>([]); // Chosen scramble words
+  const [scrambleAnswer, setScrambleAnswer] = useState<{ text: string; bankIdx: number }[]>([]); // Chosen scramble words with their unique bank indices
   const [dictationValue, setDictationValue] = useState('');
 
   // Assessment States
@@ -54,26 +197,147 @@ export default function LessonOverlay({
   const [earnedXP, setEarnedXP] = useState(0);
   const [showRuleIntro, setShowRuleIntro] = useState(lesson.rule ? true : false);
 
-  // Initialize Lesson Cards
-  useEffect(() => {
-    // Slicing or copying the embedded questions
-    const pool = [...lesson.exercises];
-    // In review mode or standard playback, let's shuffle them to keep repeat plays fresh!
-    const shuffled = pool.sort(() => Math.random() - 0.5);
-    setExercises(shuffled);
-    setCurrentIndex(0);
-    setHearts(5);
+  // Initialize and generate dynamic randomized lesson exercises
+  const initializeExercises = async () => {
     setIsLessonFinished(false);
     setWrongAnswersList([]);
     setShowRuleIntro(lesson.rule ? true : false);
+    setCurrentIndex(0);
+    setHearts(3); // In one lesson user gets only 3 hearts
 
-    // Speak initial prompts if applicable (ONLY if we are not showing the rule introduction first!)
-    if (!lesson.rule && shuffled[0] && (shuffled[0].type === 'listening-comprehension' || shuffled[0].type === 'dictation')) {
-      setTimeout(() => {
-        speakText(shuffled[0].audioText || shuffled[0].correctAnswer, userStats.settings.textToSpeechEnabled);
-      }, 600);
+    const cacheKey = `lingoclimb_cache_${lesson.id}`;
+    const cachedData = localStorage.getItem(cacheKey);
+
+    // If cache already exists for this lesson, load it instantly so replays are consistent!
+    if (cachedData) {
+      try {
+        const parsed = JSON.parse(cachedData);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setExercises(parsed);
+          setIsLoadingAI(false);
+          setAiError(null);
+          // Speak initial prompts if applicable
+          if (!lesson.rule && parsed[0] && (parsed[0].type === 'listening-comprehension' || parsed[0].type === 'dictation')) {
+            setTimeout(() => {
+              speakText(parsed[0].audioText || parsed[0].correctAnswer, userStats.settings.textToSpeechEnabled);
+            }, 600);
+          }
+          return;
+        }
+      } catch (err) {
+        console.warn("Corrupted exercise cache found, purging cache key:", cacheKey, err);
+        localStorage.removeItem(cacheKey);
+      }
     }
+
+    // Try fetching dynamically from Gemini AI server-side!
+    setIsLoadingAI(true);
+    setAiError(null);
+
+    const match = lesson.id.match(/^u(\d+)_p(\d+)$/);
+    let unitNum = 1;
+    let partIdx = 1;
+    if (match) {
+      unitNum = parseInt(match[1], 10);
+      partIdx = parseInt(match[2], 10);
+    }
+    const raw = RAW_UNITS.find(u => u.id === unitNum);
+
+    const isPractice = lesson.id === 'weak_skills_practice' || lesson.id === 'mistakes_redemption';
+    let cleanMistakes = [];
+    if (isPractice) {
+      // Map user's mistake queue to pass cleanly to Gemini
+      cleanMistakes = userStats.mistakesQueue.slice(0, 10).map(m => ({
+        type: m.type,
+        prompt: m.prompt,
+        correctAnswer: m.correctAnswer
+      }));
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 seconds abort
+
+      const payload = {
+        unitId: isPractice ? lesson.id : `unit_${unitNum}`,
+        unitTitle: isPractice ? (lesson.id === 'mistakes_redemption' ? 'Mistakes Redemption Drill' : 'Weak Skills Practice') : (raw ? raw.title : 'General Study'),
+        unitDifficulty: raw ? raw.difficulty : 'B1',
+        unitConcept: lesson.rule?.concept || '',
+        unitWords: raw ? raw.words : [],
+        unitSentences: raw ? raw.sentences : [],
+        partIdx,
+        partTitle: lesson.title,
+        partDesc: lesson.description,
+        seed: Math.random().toString(36).substring(2, 9) + Date.now().toString(),
+        mistakesQueue: cleanMistakes,
+        isPractice
+      };
+
+      const resp = await fetch('/api/generate-questions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && Array.isArray(data.exercises) && data.exercises.length > 0) {
+          const formatted = data.exercises.map((ex: any) => {
+            const exId = ex.id || `${lesson.id}_ai_${Math.random().toString(36).substring(2, 7)}`;
+            return {
+              ...ex,
+              id: exId,
+            } as BaseExercise;
+          });
+
+          // Save to local cache so on replay we receive exact questions!
+          localStorage.setItem(cacheKey, JSON.stringify(formatted));
+
+          setExercises(formatted);
+          setIsLoadingAI(false);
+
+          // Speak initial prompts if applicable (ONLY if we are not showing the rule introduction first!)
+          if (!lesson.rule && formatted[0] && (formatted[0].type === 'listening-comprehension' || formatted[0].type === 'dictation')) {
+            setTimeout(() => {
+              speakText(formatted[0].audioText || formatted[0].correctAnswer, userStats.settings.textToSpeechEnabled);
+            }, 600);
+          }
+          return;
+        }
+      }
+      throw new Error("Could not parse or generate AI questions, resorting to offline builder");
+    } catch (err: any) {
+      console.warn("AI Generation failed/timed out, invoking high-performance client-side fallback generator", err);
+      const fallbackPool = generateDynamicExercises(lesson.id, lesson.exercises);
+      const shuffled = [...fallbackPool].sort(() => Math.random() - 0.5);
+
+      // Save procedurally generated questions so replaying offline keeps them consistent too!
+      localStorage.setItem(cacheKey, JSON.stringify(shuffled));
+
+      setExercises(shuffled);
+      setIsLoadingAI(false);
+
+      if (!lesson.rule && shuffled[0] && (shuffled[0].type === 'listening-comprehension' || shuffled[0].type === 'dictation')) {
+        setTimeout(() => {
+          speakText(shuffled[0].audioText || shuffled[0].correctAnswer, userStats.settings.textToSpeechEnabled);
+        }, 600);
+      }
+    }
+  };
+
+  useEffect(() => {
+    initializeExercises();
   }, [lesson]);
+
+  const handleRetryLesson = () => {
+    sound.playClick();
+    initializeExercises();
+  };
 
   const currentExercise = exercises[currentIndex];
 
@@ -120,10 +384,8 @@ export default function LessonOverlay({
   const addWordToAnswer = (word: string, index: number) => {
     sound.playClick();
     if (isAnswered) return;
-    setScrambleAnswer([...scrambleAnswer, word]);
-    const nextBank = [...scrambleBank];
-    nextBank.splice(index, 1);
-    setScrambleBank(nextBank);
+    if (scrambleAnswer.some(item => item.bankIdx === index)) return;
+    setScrambleAnswer([...scrambleAnswer, { text: word, bankIdx: index }]);
   };
 
   const removeWordFromAnswer = (word: string, index: number) => {
@@ -132,7 +394,6 @@ export default function LessonOverlay({
     const nextAnswer = [...scrambleAnswer];
     nextAnswer.splice(index, 1);
     setScrambleAnswer(nextAnswer);
-    setScrambleBank([...scrambleBank, word]);
   };
 
   // Check Answer Handler
@@ -145,7 +406,7 @@ export default function LessonOverlay({
     if (currentExercise.type === 'meaning-selection' || currentExercise.type === 'fill-in-the-blank' || currentExercise.type === 'listening-comprehension') {
       correct = selectedOption === ans;
     } else if (currentExercise.type === 'sentence-scramble') {
-      const compiledSentence = scrambleAnswer.join(' ');
+      const compiledSentence = scrambleAnswer.map(item => item.text).join(' ');
       correct = normalizeText(compiledSentence) === normalizeText(ans);
     } else if (currentExercise.type === 'dictation') {
       correct = normalizeText(dictationValue) === normalizeText(ans);
@@ -166,7 +427,11 @@ export default function LessonOverlay({
 
   const handleContinue = () => {
     sound.playClick();
-    // Validate if hearts are zero or exercises are done
+    if (hearts <= 0) {
+      setIsLessonFinished(true);
+      return;
+    }
+    // Validate if exercises are done
     if (currentIndex >= exercises.length - 1) {
       triggerConclusion();
     } else {
@@ -212,12 +477,25 @@ export default function LessonOverlay({
     ? Math.round((currentIndex / exercises.length) * 100)
     : 0;
 
-  if (exercises.length === 0) {
+  if (isLoadingAI || exercises.length === 0) {
     return (
-      <div className="fixed inset-0 bg-[#F7F7F7] flex items-center justify-center z-50">
-        <div className="text-center">
-          <RefreshCw className="w-10 h-10 animate-spin text-[#4ECDC4] mx-auto mb-4" />
-          <p className="font-heading font-bold text-[#2C3E50]">Loading Lesson Syllabus...</p>
+      <div className="fixed inset-0 bg-[#F7F7F7] flex items-center justify-center z-50 px-4">
+        <div className="text-center max-w-sm">
+          <div className="relative inline-block mb-6">
+            <div className="w-20 h-20 bg-[#4ECDC4]/10 rounded-full flex items-center justify-center text-[#4ECDC4]">
+              <Brain className="w-10 h-10 text-[#4ECDC4] animate-pulse" />
+            </div>
+            <Sparkles className="w-6 h-6 text-yellow-400 absolute top-0 right-0 animate-bounce" />
+          </div>
+          <h2 className="text-xl font-bold font-heading text-[#2C3E50] mb-2 flex items-center gap-1.5 justify-center">
+            AI Lesson Generator <Sparkles className="w-5 h-5 text-yellow-500 fill-yellow-500 animate-pulse" />
+          </h2>
+          <p className="text-gray-500 text-sm leading-relaxed mb-6">
+            Gemini is dynamically building exactly <span className="font-extrabold text-[#4ECDC4]">10 fresh challenges</span> tailored to your unit, vocabulary, and difficulty level!
+          </p>
+          <div className="flex items-center justify-center gap-1.5 text-xs text-amber-600 font-semibold bg-amber-50 rounded-full px-4 py-1.5 inline-flex border border-amber-200">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Custom curriculum scale: {lesson.difficulty}
+          </div>
         </div>
       </div>
     );
@@ -278,7 +556,7 @@ export default function LessonOverlay({
                 {lesson.title}
               </h1>
               <p className="text-gray-500 text-sm mb-6">
-                Understand the linguistic rule below before solving the 3 exercises.
+                Understand the linguistic rule below before solving the 10 challenge questions.
               </p>
 
               <div className="space-y-4 mb-8">
@@ -408,13 +686,13 @@ export default function LessonOverlay({
                     {scrambleAnswer.length === 0 ? (
                       <span className="text-gray-400 text-sm italic py-2">Tap chips below to form sentence</span>
                     ) : (
-                      scrambleAnswer.map((word, wIdx) => (
+                      scrambleAnswer.map((item, wIdx) => (
                         <button
-                          key={`${word}-${wIdx}`}
-                          onClick={() => removeWordFromAnswer(word, wIdx)}
+                          key={`answer-${item.bankIdx}-${wIdx}`}
+                          onClick={() => removeWordFromAnswer(item.text, wIdx)}
                           className="bg-white hover:bg-gray-50 border-2 border-gray-150 px-3 py-2 rounded-xl text-sm font-semibold shadow-sm cursor-pointer hover:border-gray-300 text-gray-800"
                         >
-                          {word}
+                          {item.text}
                         </button>
                       ))
                     )}
@@ -422,15 +700,25 @@ export default function LessonOverlay({
 
                   {/* Scramble Available Chips Pool */}
                   <div className="flex flex-wrap gap-2.5 justify-center py-4">
-                    {scrambleBank.map((word, bIdx) => (
-                      <button
-                        key={`${word}-${bIdx}`}
-                        onClick={() => addWordToAnswer(word, bIdx)}
-                        className="bg-white hover:bg-gray-50 border-2 border-gray-150 active:scale-95 px-3 py-2.5 rounded-xl text-sm font-semibold shadow-sm cursor-pointer text-gray-800 hover:border-gray-300"
-                      >
-                        {word}
-                      </button>
-                    ))}
+                    {scrambleBank.map((word, bIdx) => {
+                      const isSelected = scrambleAnswer.some(item => item.bankIdx === bIdx);
+                      return isSelected ? (
+                        <div
+                          key={`shadow-${word}-${bIdx}`}
+                          className="bg-gray-100 dark:bg-gray-900/40 border-2 border-dashed border-gray-200 dark:border-gray-700/40 px-3 py-2.5 rounded-xl text-sm font-semibold select-none text-transparent pointer-events-none"
+                        >
+                          {word}
+                        </div>
+                      ) : (
+                        <button
+                          key={`active-${word}-${bIdx}`}
+                          onClick={() => addWordToAnswer(word, bIdx)}
+                          className="bg-white hover:bg-gray-50 border-2 border-gray-150 active:scale-95 px-3 py-2.5 rounded-xl text-sm font-semibold shadow-sm cursor-pointer text-gray-800 hover:border-gray-300"
+                        >
+                          {word}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -452,13 +740,53 @@ export default function LessonOverlay({
                 </div>
               )}
 
-              {/* Context Hint / Warning */}
-              {currentExercise.hint && (
-                <div className="bg-gray-50 border border-gray-150 p-4 rounded-xl text-gray-500 text-xs italic mb-4">
-                  💡 **Hint:** {currentExercise.hint}
-                </div>
-              )}
 
+
+            </motion.div>
+          ) : hearts === 0 ? (
+            /* Out of Hearts - Failure State */
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="flex-grow flex flex-col justify-center items-center py-8 text-center"
+            >
+              <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center text-red-500 mb-6 relative">
+                <motion.div
+                  animate={{ scale: [1, 1.1, 1] }}
+                  transition={{ repeat: Infinity, duration: 2.5 }}
+                >
+                  <Heart className="w-12 h-12 fill-red-500 text-red-500" />
+                </motion.div>
+              </div>
+
+              <h2 className="text-3xl font-extrabold font-heading text-red-500 mb-2">
+                Out of Hearts!
+              </h2>
+              <p className="text-gray-500 max-w-sm mb-8 text-sm sm:text-base text-center leading-relaxed">
+                You made too many mistakes in this lesson. Don't worry! Review the study guide rule and try again to master these concepts.
+              </p>
+
+              <div id="lesson-failed-stats" className="bg-red-50/50 border border-red-100 rounded-2xl p-4 w-full max-w-sm mb-8 text-center text-xs sm:text-sm text-red-800">
+                <span className="font-bold">❌ Hearts Left: 0 / 3</span>
+                <p className="text-gray-500 text-[11px] mt-1">Practicing from mistakes queue will help you consolidate your skills.</p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 w-full max-w-md px-4 justify-center">
+                <button
+                  id="lesson-retry-btn"
+                  onClick={handleRetryLesson}
+                  className="flex-1 bg-[#4ECDC4] hover:bg-[#4ECDC4]/90 text-white font-heading font-bold py-4 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 cursor-pointer hover:shadow-lg text-md uppercase tracking-wider"
+                >
+                  Retry Lesson <RefreshCw className="w-5 h-5" />
+                </button>
+                <button
+                  id="lesson-failed-quit-btn"
+                  onClick={onClose}
+                  className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-750 font-heading font-bold py-4 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 cursor-pointer hover:shadow-lg text-md"
+                >
+                  Quit Lesson
+                </button>
+              </div>
             </motion.div>
           ) : (
             /* Celebration Victory Screen */
@@ -538,22 +866,26 @@ export default function LessonOverlay({
                 </div>
               </div>
 
-              {/* Out of Hearts Warning but Free Continue Option */}
-              {hearts === 0 && (
-                <div className="bg-[#FF6B6B]/5 border border-[#FF6B6B]/20 p-4 rounded-2xl mb-8 max-w-sm text-center">
-                  <p className="text-xs text-[#FF6B6B] font-semibold">
-                    ⚠️ You finished with 0 hearts left! Practice mistakes in the Review tab to rebuild your shield.
-                  </p>
-                </div>
-              )}
-
-              <button
-                id="lesson-completion-continue-btn"
-                onClick={() => onFinishLesson(earnedXP, wrongAnswersList)}
-                className="w-full max-w-sm bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white font-heading font-bold py-4 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 cursor-pointer hover:shadow-lg text-lg"
-              >
-                Continue to Path <ArrowRight className="w-5 h-5" />
-              </button>
+              <div className="flex flex-col sm:flex-row gap-3 w-full max-w-sm mt-2">
+                <button
+                  id="lesson-completion-continue-btn"
+                  onClick={() => onFinishLesson(earnedXP, wrongAnswersList)}
+                  className="flex-1 bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white font-heading font-bold py-3.5 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 cursor-pointer hover:shadow-lg text-md"
+                >
+                  Continue <ArrowRight className="w-4 h-4" />
+                </button>
+                <button
+                  id="try-new-questions-btn"
+                  onClick={async () => {
+                    sound.playClick();
+                    localStorage.removeItem(`lingoclimb_cache_${lesson.id}`);
+                    await initializeExercises();
+                  }}
+                  className="flex-1 bg-white hover:bg-gray-50 border-2 border-gray-205 text-gray-750 font-heading font-bold py-3.5 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 cursor-pointer hover:border-gray-300 text-md"
+                >
+                  <RefreshCw className="w-4 h-4 text-[#4ECDC4]" /> New Questions
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

@@ -7,7 +7,6 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Trophy, Shield, HelpCircle, Swords, Award, AlertTriangle, ArrowUpRight } from 'lucide-react';
 import { UserStats } from '../types';
-import { LEAGUE_NAMES } from '../data';
 import { getAvatarById } from '../avatarPresets';
 
 interface LeaderboardViewProps {
